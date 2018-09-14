@@ -179,7 +179,6 @@ class ProjectDataManager:
         """
         endpoint = "https://{}/api/data-export/{}".format(self.domain, self.type)
         params = self._get_data_export_params()
-        print(params)
         r = self.session.post(endpoint, json=params, headers=self.headers)
         print(r)
         if r.status_code == 202:
@@ -266,10 +265,61 @@ class ProjectDataManager:
         elif status == "error":
             self._on_data_export_job_error()
 
-    def check_cached():
-        """Check if previously cached"""
+    def has_cached(self, file_key):
+        """Check if has previously cached file"""
 
-        return False
+        def has_filepaths(filepath):
+
+            if isinstance(filepath, list):
+                return all([os.path.exists(f) for f in filepath])
+            else:
+                return os.path.exists(filepath)
+
+        if self.type == "images":
+            if isinstance(file_key, list):
+                dir_path = file_key[0].split("_part")[0]
+                data_path = os.path.join(self.path, dir_path)
+                filepath = [
+                    os.path.join(self.path, single_file_key) for single_file_key in file_key
+                ]
+
+            else:
+                filepath = os.path.join(self.path, file_key)
+                data_path = os.path.splitext(filepath)[0]
+
+        elif self.type == "annotations":
+            filepath = os.path.join(self.path, file_key)
+            data_path = filepath
+
+        # check cached file
+        if has_filepaths(filepath) or os.path.exists(data_path):
+            # if file has been downloaded previously
+
+            if self.type == "images":
+                if not os.path.exists(data_path):
+
+                    if isinstance(file_key, list):
+                        for single_file_key in file_key:
+                            single_filepath = os.path.join(self.path, single_file_key)
+
+                            print("Extracting archive: {}".format(single_file_key))
+                            with zipfile.ZipFile(single_filepath, "r") as f:
+                                f.extractall(data_path)
+                    else:
+                        print("Extracting archive: {}".format(file_key))
+                        with zipfile.ZipFile(filepath, "r") as f:
+                            f.extractall(self.path)
+                self.data_path = data_path
+            elif self.type == "annotations":
+                self.data_path = data_path
+
+            # fire ready threading.Event
+            self._ready.set()
+            print("Using cached {} data for project {}.".format(self.type, self.project_id))
+
+            return True
+        else:
+            return False
 
     def _on_data_export_job_done(self):
         endpoint = "https://{}/api/data-export/{}/done".format(self.domain, self.type)
@@ -280,68 +330,29 @@ class ProjectDataManager:
 
             file_key = r.json()["fileKey"]
 
-            if self.type == "images":
+            if self.force_download or not self.has_cached(file_key):
 
-                if isinstance(file_key, list):
-                    print("download multiple image files")
+                if self.type == "images":
 
-                    t = threading.Thread(target=self._download_multipart_files, args=(file_key,))
-                    t.start()
+                    if isinstance(file_key, list):
+                        print("download multiple image files")
 
-                else:
-                    print("download one images file")
-                    # dir_name = os.path.splitext(filepath)[0]
+                        t = threading.Thread(
+                            target=self._download_multipart_files, args=(file_key,)
+                        )
+                        t.start()
+
+                    else:
+                        print("download one images file")
+                        # dir_name = os.path.splitext(filepath)[0]
+                        t = threading.Thread(target=self._download_file, args=(file_key,))
+                        t.start()
+
+                elif self.type == "annotations":
+                    print("download annotations")
+
                     t = threading.Thread(target=self._download_file, args=(file_key,))
                     t.start()
-
-            elif self.type == "annotations":
-                print("download annotations")
-
-                t = threading.Thread(target=self._download_file, args=(file_key,))
-                t.start()
-
-            # TODO:
-            # - reimplement cache check
-            # - reimplement force download
-
-            # filepath = os.path.join(self.path, file_key)
-
-            # if self.type == "images":
-            #     data_path = os.path.splitext(filepath)[0]
-            # elif self.type == "annotations":
-            #     data_path = filepath
-
-            # if not self.force_download:
-
-            #     # check cached file
-            #     if os.path.exists(filepath) or os.path.exists(data_path):
-            #         # if file has been downloaded previously
-
-            #         if self.type == "images":
-            #             if not os.path.exists(data_path):
-            #                 print("Extracting archive: {}".format(file_key))
-            #                 with zipfile.ZipFile(filepath, "r") as f:
-            #                     f.extractall(self.path)
-            #             self.data_path = data_path
-            #         elif self.type == "annotations":
-            #             self.data_path = data_path
-
-            #         # fire ready threading.Event
-            #         self._ready.set()
-            #         print(
-            #             "Using cached {} data for project {}.".format(
-            #                 self.type, self.project_id
-            #             )
-            #         )
-            #     else:
-            #         # download in separate thread
-            #         t = threading.Thread(target=self._download_file, args=(file_key,))
-            #         t.start()
-            # else:
-            #     # force download, ignore cached file
-            #     # download in separate thread
-            #     t = threading.Thread(target=self._download_file, args=(file_key,))
-            #     t.start()
 
         except (TypeError, KeyError):
             self._on_data_export_job_error(type, project_id)
